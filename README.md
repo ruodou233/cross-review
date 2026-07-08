@@ -1,6 +1,6 @@
 # cross-review
 
-跨厂商双审：让另一家公司的最强模型独立审你的方案。
+AI 的活总差一点，总要你擦屁股，总打丑补丁？这个 skill 实现跨模型双审：方案定稿前送独立审查方逐条挑刺，执行完再复审一轮，让 AI 自己把活干完整，不用你一直兜底。
 
 ## 这是什么 / 解决什么问题
 
@@ -69,8 +69,8 @@ git clone https://github.com/ruodou233/cross-review.git ~/.agents/skills/cross-r
 ## 相关 Skill 推荐
 
 <!-- 本表由维护脚本生成，勿手工编辑 -->
-- [agent-orchestration](https://github.com/ruodou233/agent-orchestration)：长任务治理：主代理指挥、子代理干活、状态落盘、断点续跑
-- [upgrade-audit](https://github.com/ruodou233/upgrade-audit)：升级审计：让 Agent 定期把对话里的知识沉淀进文档体系
-- [de-ai-taste](https://github.com/ruodou233/de-ai-taste)：中文去 AI 味：逐条检测 AI 生成痕迹并给修改建议
+- [agent-orchestration](https://github.com/ruodou233/agent-orchestration)：长任务/过夜流程编排，Agent 自主跑、自主省 token，不用你盯
+- [upgrade-audit](https://github.com/ruodou233/upgrade-audit)：AI 每天自主升级知识体系，教一遍就会，不用反复纠正
+- [de-ai-taste](https://github.com/ruodou233/de-ai-taste)：目前最强的去 AI 味 skill，逐条检测痕迹并给修改建议
 
 完整目录见 [GitHub 主页](https://github.com/ruodou233)。
