@@ -67,7 +67,7 @@ cat /tmp/cr-out.md
 - 分级审查：大方案/架构变更全量审；小改动只送 diff+未决项+上轮结论。审查输出三分类（阻断问题/非阻断建议/需用户决策项），不复述材料。
 - pending 标记（合规 hook 消费）：提出需审方案时建 `cross-review/pending/<主题>.proposed`，送审后改名 `.sent`，结果回来改名 `.returned`，处理完删除；文件内容可写人类备注，脚本不解析。悬置超 30 分钟会被合规提醒。（作者环境的合规 hook 为私有自动化，不随包发布）
 
-> 非交互环境三坑（2026-07-04 补）：①PATH——codex 真实二进制在 app 包内且会随 app 更名漂移，所有消费者统一经 `~/.local/bin/codex` symlink 调用，漂移时只修 symlink；②信任目录——工作目录非 git 仓库时报 "Not inside a trusted directory"，须 `--skip-git-repo-check` 或 cd 进仓库；③stdin——见下条。
+> 非交互环境三坑（2026-07-04 补）：①PATH——codex 二进制仅在 app 包内（`/Applications/Codex.app/Contents/Resources/codex`），已做 `~/.local/bin/codex` symlink（app 升级路径不变）；②信任目录——工作目录非 git 仓库时报 "Not inside a trusted directory"，须 `--skip-git-repo-check` 或 cd 进仓库；③stdin——见下条。
 >
 > 脚本/无终端环境调 `codex exec` 必须显式关闭 stdin（`< /dev/null` 或 `stdin=subprocess.DEVNULL`），否则挂起等待输入（2026-07-03 实测）。
 >
