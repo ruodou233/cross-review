@@ -67,7 +67,7 @@ cat /tmp/cr-out.md
 - 分级审查：大方案/架构变更全量审；小改动只送 diff+未决项+上轮结论。审查输出三分类（阻断问题/非阻断建议/需用户决策项），不复述材料。
 - pending 标记（合规 hook 消费）：提出需审方案时建 `cross-review/pending/<主题>.proposed`，送审后改名 `.sent`，结果回来改名 `.returned`，处理完删除；文件内容可写人类备注，脚本不解析。悬置超 30 分钟会被合规提醒。（作者环境的合规 hook 为私有自动化，不随包发布）
 
-> 非交互环境三坑（2026-07-04 补）：①PATH——codex 二进制仅在 app 包内（`/Applications/Codex.app/Contents/Resources/codex`），已做 `~/.local/bin/codex` symlink（app 升级路径不变）；②信任目录——工作目录非 git 仓库时报 "Not inside a trusted directory"，须 `--skip-git-repo-check` 或 cd 进仓库；③stdin——见下条。
+> 非交互环境三坑（2026-07-04 补）：①PATH——codex 真实二进制在 app 包内且会随 app 更名漂移，所有消费者统一经 `~/.local/bin/codex` symlink 调用，漂移时只修 symlink；②信任目录——工作目录非 git 仓库时报 "Not inside a trusted directory"，须 `--skip-git-repo-check` 或 cd 进仓库；③stdin——见下条。
 >
 > 脚本/无终端环境调 `codex exec` 必须显式关闭 stdin（`< /dev/null` 或 `stdin=subprocess.DEVNULL`），否则挂起等待输入（2026-07-03 实测）。
 >
@@ -228,6 +228,33 @@ claude -p --model <plan内最强Claude模型> "你是独立审查者，审查内
 4. **（低）launchd ThrottleInterval**：plist 无 ThrottleInterval，FSEvent 抖动会多次触发 drain 尝试获锁。建议加 `<key>ThrottleInterval</key><integer>10</integer>`。
 5. **（低）日志 rotation**：drain 和 wait 日志追加无上限。低频使用影响极小，高频或大量失败时会累积。
 6. **（中）双 lens 编排脚本化**：当前双 lens 为手工三次 `codex exec` 编排。建议做正式入口（`bin/codex-review-dual-lens` 或 drain 支持 `Review-Mode: dual-lens`）：统一生成送审包、并行两路、自动聚合、归档两路原文。
+
+## 审查标识与生命周期（ledger，参考实现）
+
+前面几节讲的是「怎么发起一次审查」；当审查任务变多（多方案并发、跨天延续）时，光靠对话记录容易出现两类遗忘：**宣称已送审但实际没送审**，以及**审查结果回来了但没人处理**。以下是作者环境验证过的一种机器可对账方案，一份可运行的参考实现在 `reference-impl/`（脚本、角色合同模板、保护路径示例齐全，非 drop-in，用前请看该目录 `README.md` 的改动清单）。
+
+**核心思路**：给每个走审查流程的任务分配一个稳定 `review_id`（`YYYY-MM-DD-<主题slug>`，与归档目录同名，永不复用），走一个状态机：
+
+```
+open ─pre approve─> plan_approved ─impl-start─> implementing ─post approve─> post_approved ─close─> closed
+```
+
+`closed` 为终态，返工需开新 `review_id` 并注明承接关系；`request-changes` 只追加新一轮尝试，不改变状态；实施过程中如需 rebase 或修订已批准的实施后审查结论，`post_approved` 会失效退回 `implementing`。
+
+- **能力边界（如实声明）**：这是「防遗忘 + 只读对账」，不是强制拦截——降低遗忘，让已进入配置分支的部分绕过和漂移能在下次对账时被发现。可绕过路径包括：跳过本地钩子直接推送、直接改台账或保护清单本身、蓄意伪造记录、远端网页直接提交、强制推送、删除受保护分支。真正的强制需要远端侧的状态检查（例如代码托管平台的分支保护规则），这套参考实现本身做不到。
+- **数据源**：`cross-review/ledger/<review_id>.json` 是当前状态（唯一正常写入口是 `review_ledger.py`）；每次审查尝试生成一份不可变、内容寻址的 attempt manifest（存于 `archive/<id>/manifests/`）；豁免记录独立存 `cross-review/exemptions/`。汇总视图 `review-log.md` 由 `render` 命令生成，不手工编辑。
+- **审查事实绑定**：每路审查（regular/adversarial/aggregate）产出一份 receipt，记录请求的模型/档位钉参、prompt 与 output 的 sha256、session id、禁分叉核验结果；manifest 组装时机械校验三路 session 互异、聚合 prompt 确实包含两路完整输出及其哈希。这只验证「请求钉参」，不代表观测到了服务端的真实执行档位；蓄意伪造在威胁模型之外。触及保护路径默认要求双 lens；用单路审查（`single` 模式）必须携带用户原话授权摘录（文件 + sha256），否则 finalize 直接拒绝写入。
+- **commit 关联（可选，需要更强约束时再做）**：如果你想更进一步，把审查结论和实际代码绑定，可以用一份 `protected-paths.json`（示例见 `reference-impl/protected-paths.example.json`）定义哪些路径改动前必须先有已 `closed` 的 review，再配一个 pre-push 钩子核验：改动落在保护路径内的 commit 必须带 `Review-ID: <id>` 或 `Review-Exempt-ID: <EX-id>` trailer，且对应 review 的批准区间（`covered_commits`）经 Git 历史逐一核对一致。这一层是可选的强化，协议本身不要求。
+
+### 豁免
+
+保护路径改动不由提交者自我判断放行——「纯格式/typo/索引行」也要走豁免记录，commit message 里写关键字不构成豁免。豁免经 `review_ledger.py exempt` 生成独立记录：用户授权出处（原话摘录文件 + sha256）、原因、目标 commit SHA、受影响路径、时间。同一豁免可被重复引用，这是已接受的风险，不做一次性消费绑定。
+
+### 证据保留与隐私
+
+两类证据的去留不一样，容易被前一句"长期保留"带着混着理解，分开说清楚：
+- **进 tracked 版本控制、长期保留**：ledger 状态、manifest、每路审查的**完整 prompt 与 output 原文**（作为 Markdown 文件存入审查归档）、role 合同快照、授权摘录。这些新写入前会先过一遍形似真实密钥/令牌的文本扫描（命中直接拒绝写入），且单文件不超过 1MiB——但这只能拦掉几类凭证形态，拦不住本机路径、内部代号、组织架构这类非凭证型隐私，不能当成完整脱敏保证。
+- **不进版本控制、只在本机保留一段时间**：审查的原始 `--json` 全量事件流（NDJSON 轨迹）和 stderr，参考实现里默认落在 Git 元数据目录（不被追踪）、保留 90 天。tracked 的 receipt 里会保留这两个文件各自的相对路径、sha256 和字节数，方便事后核对本机是否还留着，但**正文内容本身不进版本控制**。
 
 ## 首次使用：环境自适应（由你的 Agent 执行）
 

@@ -1,0 +1,28 @@
+{
+  "comment": "保护路径唯一 source of truth 的示例 schema。本参考实现不附带读取这份文件的 pre-push 检查器——commit-Review-ID 绑定、豁免核验这套强制机制需要你自己另外写一个钩子去消费它；没有钩子时，这份文件只是摆设，不会拦下任何东西。匹配语义：精确路径，或以 /** 结尾的目录前缀（按 git 路径原文逐段比较，不解引 symlink；不是 gitignore glob）。单版内优先级：exclude > bookkeeping > protected。把下面几段路径换成你自己仓库里真正重要、不该被绕过审查直接改动的文件/目录。",
+  "schema_version": 1,
+  "cutover_base_sha": "<启用保护时的 commit SHA，此后才追溯校验>",
+  "protected_ref": "origin/main",
+  "protected": [
+    "docs/policy.md",
+    ".gitignore",
+    "scripts/**",
+    "src/**",
+    "cross-review/**"
+  ],
+  "exclude": [
+    "cross-review/inbox/**",
+    "cross-review/processing/**",
+    "cross-review/done/**",
+    "cross-review/failed/**",
+    "cross-review/logs/**",
+    "cross-review/locks/**",
+    "cross-review/pending/**"
+  ],
+  "bookkeeping": [
+    "cross-review/ledger/**",
+    "cross-review/exemptions/**",
+    "cross-review/review-log.md",
+    "cross-review/archive/**"
+  ]
+}
