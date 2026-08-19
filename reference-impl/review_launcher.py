@@ -39,14 +39,13 @@ def template_path(root: Path, role: str) -> Path:
 
 
 def build_base_prompt(template: str, request: str, material: str, questions: str) -> str:
-    return (
+    prompt = (
         template.rstrip() + "\n\n## 用户原始需求\n" + request.rstrip()
         + "\n\n## 待审内容原文\n" + material.rstrip()
-        + "\n\n## 固定三问\n"
-        + "1. 有什么更优的做法或方案？\n2. 哪些内容过于冗余，应如何删改？\n"
-          "3. 方案有哪些未覆盖的场景、风险或依赖？\n"
-        + ("\n## 验收标准与定向问题\n" + questions.rstrip() + "\n" if questions else "")
     )
+    if questions:
+        prompt += "\n\n## 验收标准与定向问题\n" + questions.rstrip() + "\n"
+    return prompt
 
 
 def load_receipt(root: Path, value: str) -> tuple[Path, dict[str, Any]]:
@@ -62,23 +61,7 @@ def build_prompt(args: argparse.Namespace, root: Path) -> str:
     questions = ""
     if args.questions_file:
         questions = ledger.checked_bytes(ledger.resolve_repo_path(root, args.questions_file)).decode()
-    prompt = build_base_prompt(template, request, material, questions)
-    if args.role == "aggregate":
-        if not args.regular_receipt or not args.adversarial_receipt:
-            raise ledger.LedgerError("aggregate 必须提供两路 receipt")
-        additions = []
-        for role, ref in (("regular", args.regular_receipt), ("adversarial", args.adversarial_receipt)):
-            _, receipt = load_receipt(root, ref)
-            if receipt.get("role") != role:
-                raise ledger.LedgerError(f"{role} receipt 角色不匹配")
-            output_file = receipt.get("output_file")
-            output = ledger.checked_bytes(ledger.resolve_repo_path(root, output_file)).decode()
-            digest = ledger.sha256_bytes(output.encode())
-            if digest != receipt.get("output_sha256"):
-                raise ledger.LedgerError(f"{role} 输出哈希不匹配")
-            additions.append(f"## {role} 完整输出（sha256: {digest}）\n{output.rstrip()}\n")
-        prompt += "\n" + "\n".join(additions)
-    return prompt
+    return build_base_prompt(template, request, material, questions)
 
 
 def trace_facts(raw: bytes) -> tuple[str, str, list[dict[str, Any]]]:
@@ -250,8 +233,8 @@ def run_role(args: argparse.Namespace, root: Path) -> None:
     print(ledger.relative(root, receipt_path))
 
 
-def dual_run(args: argparse.Namespace, root: Path) -> None:
-    """用两个独立进程发起互不可见 lenses，再将完整输出送聚合位。"""
+def parallel_run(args: argparse.Namespace, root: Path) -> None:
+    """三路并行：issues / simplification / research，结果交主 Agent 裁决。"""
     base = [sys.executable, str(Path(__file__).resolve()), "run", "--review-id", args.review_id,
             "--phase", args.phase, "--user-request-file", args.user_request_file,
             "--material-file", args.material_file, "--timeout", str(args.timeout)]
@@ -265,19 +248,16 @@ def dual_run(args: argparse.Namespace, root: Path) -> None:
             raise ledger.LedgerError(f"{role} 路失败：{proc.stderr.strip()}")
         return proc.stdout.strip()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        future_regular = pool.submit(child, "regular")
-        future_adversarial = pool.submit(child, "adversarial")
-        regular = future_regular.result()
-        adversarial = future_adversarial.result()
-    aggregate_cmd = base + ["--role", "aggregate", "--regular-receipt", regular,
-                            "--adversarial-receipt", adversarial]
-    aggregate_proc = subprocess.run(aggregate_cmd, cwd=root, text=True,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if aggregate_proc.returncode:
-        raise ledger.LedgerError(f"aggregate 路失败：{aggregate_proc.stderr.strip()}")
-    print(json.dumps({"regular": regular, "adversarial": adversarial,
-                      "aggregate": aggregate_proc.stdout.strip()}, ensure_ascii=False, sort_keys=True))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {role: pool.submit(child, role) for role in ROLES}
+        results = {role: future.result() for role, future in futures.items()}
+    print(json.dumps(results, ensure_ascii=False, sort_keys=True))
+
+
+def dual_run_removed(args: argparse.Namespace, root: Path) -> None:
+    raise ledger.LedgerError(
+        "dual-run / 对抗位已移除。请改用 parallel-run（issues + simplification + research，结果交主 Agent 裁决）"
+    )
 
 
 def parse_receipt_args(values: list[str]) -> dict[str, str]:
@@ -343,29 +323,26 @@ def finalize(args: argparse.Namespace, root: Path) -> None:
     if args.mode == "single":
         if len(refs) != 1:
             raise ledger.LedgerError("single 模式必须且只能有一个 role receipt")
-    elif set(refs) != set(ROLES):
-        raise ledger.LedgerError(f"dual 模式 receipt 角色必须为 {sorted(ROLES)}")
-    if args.mode == "single":
         if not args.authorized_by_file or not args.single_reason:
             raise ledger.LedgerError("single 必须提供授权摘录文件与理由")
         auth_path = ledger.resolve_repo_path(root, args.authorized_by_file)
         auth_sha = ledger.file_sha(auth_path)
-    else:
+    elif args.mode == "parallel":
+        if set(refs) != set(ROLES):
+            raise ledger.LedgerError(f"parallel 模式 receipt 角色必须为 {sorted(ROLES)}")
         if args.authorized_by_file or args.single_reason:
-            raise ledger.LedgerError("dual 不接受 single 授权参数")
+            raise ledger.LedgerError("parallel 不接受 single 授权参数")
         auth_path = None
         auth_sha = None
+    else:
+        raise ledger.LedgerError("mode 必须为 parallel 或 single")
     receipts: dict[str, Any] = {}
     for role, ref in refs.items():
         path, receipt = load_receipt(root, ref)
         receipts[role] = {"receipt_file": ledger.relative(root, path),
                           "receipt_sha256": ledger.file_sha(path), **receipt}
     _reject_reused_receipts(root, args.review_id, receipts)
-    verdict_receipt = receipts["aggregate"] if args.mode == "dual" else next(iter(receipts.values()))
-    output = ledger.checked_bytes(ledger.resolve_repo_path(root, verdict_receipt["output_file"])).decode()
-    verdict = ledger.verdict_from_output(output)
-    if args.verdict and args.verdict != verdict:
-        raise ledger.LedgerError("--verdict 与聚合输出不一致")
+    verdict = args.verdict
     manifest: dict[str, Any] = {
         "schema_version": 1, "review_id": args.review_id, "phase": args.phase,
         "n": args.n, "mode": args.mode, "roles": receipts,
@@ -411,17 +388,20 @@ def parser() -> argparse.ArgumentParser:
     q.add_argument("--review-id", required=True); q.add_argument("--phase", choices=("pre", "post"), required=True)
     q.add_argument("--role", choices=ROLES, required=True); q.add_argument("--user-request-file", required=True)
     q.add_argument("--material-file", required=True); q.add_argument("--questions-file")
-    q.add_argument("--regular-receipt"); q.add_argument("--adversarial-receipt")
     q.add_argument("--timeout", type=int, default=900); q.add_argument("--receipt-out"); q.set_defaults(fn=run_role)
+    q = sub.add_parser("parallel-run")
+    q.add_argument("--review-id", required=True); q.add_argument("--phase", choices=("pre", "post"), required=True)
+    q.add_argument("--user-request-file", required=True); q.add_argument("--material-file", required=True)
+    q.add_argument("--questions-file"); q.add_argument("--timeout", type=int, default=900); q.set_defaults(fn=parallel_run)
     q = sub.add_parser("dual-run")
     q.add_argument("--review-id", required=True); q.add_argument("--phase", choices=("pre", "post"), required=True)
     q.add_argument("--user-request-file", required=True); q.add_argument("--material-file", required=True)
-    q.add_argument("--questions-file"); q.add_argument("--timeout", type=int, default=900); q.set_defaults(fn=dual_run)
+    q.add_argument("--questions-file"); q.add_argument("--timeout", type=int, default=900); q.set_defaults(fn=dual_run_removed)
     q = sub.add_parser("finalize")
     q.add_argument("--review-id", required=True); q.add_argument("--phase", choices=("pre", "post"), required=True)
-    q.add_argument("--n", type=int, required=True); q.add_argument("--mode", choices=("dual", "single"), required=True)
+    q.add_argument("--n", type=int, required=True); q.add_argument("--mode", choices=("parallel", "single"), required=True)
     q.add_argument("--receipt", action="append", default=[], required=True); q.add_argument("--material-file", action="append", default=[], required=True)
-    q.add_argument("--verdict", choices=ledger.VERDICTS); q.add_argument("--authorized-by-file"); q.add_argument("--single-reason")
+    q.add_argument("--verdict", choices=ledger.VERDICTS, required=True); q.add_argument("--authorized-by-file"); q.add_argument("--single-reason")
     q.add_argument("--user-quote-file")
     q.set_defaults(fn=finalize)
     return p
@@ -434,7 +414,7 @@ def main() -> int:
         ledger.load_state(root, args.review_id)
         if hasattr(args, "timeout") and args.timeout < 1:
             raise ledger.LedgerError("timeout 必须大于零")
-        # finalize 产生不可变 manifest，持 ledger 同一锁；两路审查进程需并发且各用唯一文件名。
+        # finalize 产生不可变 manifest，持 ledger 同一锁；三路审查进程需并发且各用唯一文件名。
         if args.command == "finalize":
             with ledger.writer_lock(root):
                 args.fn(args, root)

@@ -37,7 +37,7 @@ SECRET_PATTERNS = [
 ]
 STATUSES = ("open", "plan_approved", "implementing", "post_approved", "closed")
 VERDICTS = ("approve", "request-changes", "reject")
-REVIEW_ROLES = ("regular", "adversarial", "aggregate")
+REVIEW_ROLES = ("issues", "simplification", "research")
 # 按你自己的 CLI/订阅改：本机可用的最强第二厂商模型与推理档位。
 REVIEW_MODEL = os.environ.get("REVIEW_MODEL", "<your-strongest-reviewer-model>")
 REVIEW_EFFORT = os.environ.get("REVIEW_EFFORT", "high")
@@ -208,7 +208,7 @@ def verdict_from_output(text: str) -> str:
         text,
     )
     if len(matches) != 1:
-        raise LedgerError("聚合输出必须有且只有一个可核对的 Verdict")
+        raise LedgerError("输出必须有且只有一个可核对的 Verdict")
     return matches[0]
 
 
@@ -253,13 +253,13 @@ def validate_manifest_data(
 
     mode = manifest.get("mode")
     roles = manifest.get("roles")
-    expected_roles = set(REVIEW_ROLES) if mode == "dual" else None
+    expected_roles = set(REVIEW_ROLES) if mode == "parallel" else None
     if mode == "single":
         if not isinstance(roles, dict) or len(roles) != 1 or not manifest.get("single_authorization"):
             raise LedgerError("single manifest 必须有且只有一个 role，并绑定授权摘录与理由")
         expected_roles = set(roles)
-    elif mode != "dual":
-        raise LedgerError("manifest mode 必须为 dual 或 single")
+    elif mode != "parallel":
+        raise LedgerError("manifest mode 必须为 parallel 或 single")
     if not isinstance(roles, dict) or set(roles) != expected_roles:
         raise LedgerError(f"manifest roles 与 {mode} 模式不匹配")
 
@@ -344,18 +344,7 @@ def validate_manifest_data(
         raise LedgerError("各路 session id 必须互异")
     if len(bindings) != 1:
         raise LedgerError("各路 receipt 的 review/material/user-request 绑定必须一致")
-
-    verdict_role = "aggregate" if mode == "dual" else next(iter(roles))
-    verdict_receipt = roles[verdict_role]
-    if mode == "dual":
-        aggregate_prompt = checked_bytes(resolve_repo_path(root, verdict_receipt["prompt_file"])).decode()
-        for role in ("regular", "adversarial"):
-            output = checked_bytes(resolve_repo_path(root, roles[role]["output_file"])).decode()
-            if output not in aggregate_prompt or roles[role]["output_sha256"] not in aggregate_prompt:
-                raise LedgerError("聚合 prompt 未包含两路完整输出及 hash")
-    verdict_text = checked_bytes(resolve_repo_path(root, verdict_receipt["output_file"])).decode()
-    if verdict_from_output(verdict_text) != manifest["verdict"]:
-        raise LedgerError("manifest verdict 与审查输出不一致")
+    # 三路审查位不给 Verdict；裁决由主 Agent 写入 manifest["verdict"]，已在函数开头校验。
     return warnings_out
 
 
@@ -566,8 +555,8 @@ def _verify_covered_commits(root: Path, state: dict[str, Any], manifest_ref: str
 def cmd_close(args: argparse.Namespace, root: Path) -> None:
     path, state = load_state(root, args.review_id)
     require_state(state, "post_approved")
-    if args.source not in ("regular", "adversarial", "both", "mixed", "-"):
-        raise LedgerError("source 只允许 regular/adversarial/both/mixed/-")
+    if args.source not in ("issues", "simplification", "research", "mixed", "-"):
+        raise LedgerError("source 只允许 issues/simplification/research/mixed/-")
     latest = latest_approve(state, "post")
     state["closure"] = {"issues": args.issues, "adopted": args.adopted,
                         "source": args.source, "note": args.note}
@@ -736,7 +725,7 @@ def cmd_verify(args: argparse.Namespace, root: Path) -> None:
 
 
 def display_mode(attempts: list[dict[str, Any]]) -> str:
-    return "dual-lens" if any(a.get("mode") == "dual" for a in attempts) else "single-review"
+    return "parallel-review" if any(a.get("mode") == "parallel" for a in attempts) else "single-review"
 
 
 def cmd_render(args: argparse.Namespace, root: Path) -> None:
@@ -775,7 +764,7 @@ def cmd_render(args: argparse.Namespace, root: Path) -> None:
             if not strict_attempts:
                 continue
             mode = display_mode(strict_attempts)
-            source = closure.get("source", "-") if mode == "dual-lens" else "-"
+            source = closure.get("source", "-") if mode == "parallel-review" else "-"
             fields = [date, ref, topic, mode, source,
                       closure.get("issues", ""), closure.get("adopted", ""),
                       str(len(strict_attempts)), closure.get("note", "")]
