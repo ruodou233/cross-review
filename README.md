@@ -1,4 +1,6 @@
-# cross-review
+# AI 跨模型代码与方案审查｜Multi-Model Code & Design Review
+
+An agent skill for independent code and design reviews across AI providers, checking correctness, complexity, and better approaches.
 
 AI 的活总差一点，总要你擦屁股，总打丑补丁？这个 skill 让另一家 AI 在方案定稿前挑刺、干完后再查一遍，找遗漏、删不必要的复杂度、看看有没有更好的做法，让 AI 自己把活干完整，不用你一直兜底。
 
