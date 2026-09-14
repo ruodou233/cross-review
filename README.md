@@ -45,6 +45,10 @@ git clone https://github.com/ruodou233/cross-review.git ~/.agents/skills/cross-r
 
 首次使用与写入权限规则见 [`SKILL.md`](SKILL.md)。
 
+## 真实案例：六轮审查改掉作者自己的两个错误结论
+
+我们的委派治理方案从 v1 到 v6 被跨审改了五轮，另一家公司的模型抓出作者自己写进去的两个错误结论——「委派本身净省」和「公开仓为唯一源」，前者三路审查同时指出，后者差一步留下孤立 gitlink。[审查稿与最终规则](https://github.com/ruodou233/agent-orchestration/blob/main/research/2026-09-delegation-study.md)
+
 ## 反馈
 
 发现问题或有改进方案，欢迎在本仓提交 issue 或 PR。
